@@ -22,6 +22,7 @@ var/
 wheels/
 share/python-wheels/
 *.egg-info/
+*.egg-info
 .installed.cfg
 *.egg
 MANIFEST
@@ -206,6 +207,10 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# Local model cache from older appcategorizer layouts.
+appcategorizer/engine/local_model/
+engine/local_model/
+
 # PyPI configuration file
 .pypirc
 
@@ -216,3 +221,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Model ML local
+local_model/
+
+.DS_Store

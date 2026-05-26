@@ -4,3 +4,5 @@ sentence-transformers
 beautifulsoup4
 playwright
 rich
+platformdirs>=4.0.0
+ttkbootstrap>=1.10.0

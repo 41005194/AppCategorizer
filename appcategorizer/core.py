@@ -1,0 +1,120 @@
+from collections import Counter
+from collections.abc import Callable
+import logging
+from pathlib import Path
+from typing import Literal, Protocol
+
+logger = logging.getLogger("AppCategorizer")
+
+AnalysisMode = Literal["local_ml", "cloud_llm"]
+DEFAULT_ANALYSIS_MODE: AnalysisMode = "local_ml"
+DEFAULT_LOCAL_MODEL_NAME = "all-MiniLM-L6-v2"
+
+
+class ResolverLike(Protocol):
+    async def resolve(self, raw_name: str) -> dict[str, list[str]]:
+        ...
+
+
+class ClassifierLike(Protocol):
+    def classify(self, tokens: list[str]) -> str:
+        ...
+
+
+class Categorizer:
+    def __init__(
+        self,
+        resolver: ResolverLike | None = None,
+        classifier: ClassifierLike | None = None,
+        on_progress: Callable[[str], None] | None = None,
+        model_cache_dir: str | Path | None = None,
+    ):
+        self.on_progress = on_progress
+        self.model_cache_dir = Path(model_cache_dir) if model_cache_dir is not None else None
+
+        if resolver is None or classifier is None:
+            self._progress("Loading libraries...")
+
+        if resolver is None:
+            from .engine.resolver import Resolver
+
+            resolver = Resolver()
+
+        self.resolver = resolver
+        self.classifier = classifier
+        self._local_ml_classifiers: dict[str, ClassifierLike] = {}
+
+    def _progress(self, message: str) -> None:
+        if self.on_progress is not None:
+            self.on_progress(message)
+
+    def _get_classifier(
+        self,
+        analysis_mode: AnalysisMode,
+        local_model_name: str,
+    ) -> ClassifierLike:
+        if not isinstance(analysis_mode, str):
+            raise ValueError("analysis_mode must be 'local_ml' or 'cloud_llm'.")
+
+        if analysis_mode == "cloud_llm":
+            raise NotImplementedError("Cloud LLM analysis mode is not implemented yet.")
+
+        if analysis_mode != "local_ml":
+            raise ValueError("analysis_mode must be 'local_ml' or 'cloud_llm'.")
+
+        if not isinstance(local_model_name, str):
+            raise ValueError("local_model_name must be a non-empty string.")
+
+        if not local_model_name.strip():
+            raise ValueError("local_model_name must not be empty.")
+
+        if self.classifier is not None:
+            return self.classifier
+
+        if local_model_name not in self._local_ml_classifiers:
+            from .engine.embedding_classifier import EmbeddingClassifier
+
+            self._progress("Initializing model in memory...")
+            if EmbeddingClassifier.need_download(local_model_name, self.model_cache_dir):
+                self._progress("Downloading model for the first time (this may take a moment)...")
+            else:
+                self._progress("Model found locally, loading from disk...")
+
+            self._local_ml_classifiers[local_model_name] = EmbeddingClassifier(
+                local_model_name,
+                cache_dir=self.model_cache_dir,
+            )
+
+        return self._local_ml_classifiers[local_model_name]
+
+    async def resolve_and_classify(
+        self,
+        app_name: str,
+        analysis_mode: AnalysisMode = DEFAULT_ANALYSIS_MODE,
+        local_model_name: str = DEFAULT_LOCAL_MODEL_NAME,
+    ) -> str:
+        if not isinstance(app_name, str) or not app_name.strip():
+            raise ValueError("app_name must be a non-empty string.")
+
+        classifier = self._get_classifier(analysis_mode, local_model_name)
+
+        self._progress(f"Searching metadata for: '{app_name}'...")
+        source_tokens = await self.resolver.resolve(app_name)
+
+        if not source_tokens:
+            return "Others"
+
+        predicted_categories = []
+        self._progress("Classifying results...")
+
+        for source_name, tokens in source_tokens.items():
+            category = classifier.classify(tokens)
+            predicted_categories.append(category)
+            logger.debug(f"[CLASSIFIER] {source_name} -> {category}")
+
+        real_categories = [category for category in predicted_categories if category != "Others"]
+        if not real_categories:
+            return "Others"
+
+        counter = Counter(real_categories)
+        return counter.most_common(1)[0][0]

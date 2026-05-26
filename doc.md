@@ -6,12 +6,13 @@ The application is a CLI app categorizer. It takes an application name, queries 
 
 ## Project Structure
 
-- `categorizer.py`: CLI entry point, progress display, final result.
-- `engine/resolver.py`: orchestrates all data sources asynchronously.
-- `engine/sources/`: one module per metadata source.
-- `engine/sources/base.py`: shared relevance matching logic.
-- `engine/embedding_classifier.py`: embedding model, category descriptions, similarity scoring.
-- `engine/logger.py`: shared logging configuration.
+- `appcategorizer/`: importable Python package.
+- `appcategorizer/cli.py`: CLI entry point, progress display, final result.
+- `appcategorizer/engine/resolver.py`: orchestrates all data sources asynchronously.
+- `appcategorizer/engine/sources/`: one module per metadata source.
+- `appcategorizer/engine/sources/base.py`: shared relevance matching logic.
+- `appcategorizer/engine/embedding_classifier.py`: embedding model, category descriptions, similarity scoring.
+- `appcategorizer/engine/logger.py`: shared logging configuration.
 
 ## Data Sources
 
