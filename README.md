@@ -1,6 +1,9 @@
-# appcategorizer
+# AppCategorizer
 
-`appcategorizer` is a Python library and command-line tool that tries to classify an application into a broad software category from its name.
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)
+[![Python](https://img.shields.io/badge/Python-orange)](https://www.python.org/)
+
+`AppCategorizer` is a Python library and command-line tool that tries to classify an application into a broad software category from its name.
 
 It gathers metadata from several public sources, classifies each source independently with a local sentence-transformer model, then keeps the category selected by majority vote.
 
