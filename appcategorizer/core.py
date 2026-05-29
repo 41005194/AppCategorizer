@@ -15,6 +15,9 @@ class ResolverLike(Protocol):
     async def resolve(self, raw_name: str) -> dict[str, list[str]]:
         ...
 
+    def sanitize(self, raw_name: str) -> str:
+        ...
+
 
 class ClassifierLike(Protocol):
     def classify(self, tokens: list[str]) -> str:
@@ -48,25 +51,12 @@ class Categorizer:
         if self.on_progress is not None:
             self.on_progress(message)
 
-    def _get_classifier(
+    def _get_local_classifier(
         self,
-        analysis_mode: AnalysisMode,
         local_model_name: str,
     ) -> ClassifierLike:
-        if not isinstance(analysis_mode, str):
-            raise ValueError("analysis_mode must be 'local_ml' or 'cloud_llm'.")
-
-        if analysis_mode == "cloud_llm":
-            raise NotImplementedError("Cloud LLM analysis mode is not implemented yet.")
-
-        if analysis_mode != "local_ml":
-            raise ValueError("analysis_mode must be 'local_ml' or 'cloud_llm'.")
-
-        if not isinstance(local_model_name, str):
+        if not isinstance(local_model_name, str) or not local_model_name.strip():
             raise ValueError("local_model_name must be a non-empty string.")
-
-        if not local_model_name.strip():
-            raise ValueError("local_model_name must not be empty.")
 
         if self.classifier is not None:
             return self.classifier
@@ -87,16 +77,64 @@ class Categorizer:
 
         return self._local_ml_classifiers[local_model_name]
 
+    def _get_llm_classifier(
+        self,
+        llm_provider: str | None,
+        llm_model: str | None,
+        llm_api_key: str | None,
+        llm_base_url: str | None,
+    ):
+        from .engine.llm_classifier import LLMClassifier, KNOWN_PROVIDERS
+
+        if not llm_provider:
+            raise ValueError(
+                f"analysis_mode='cloud_llm' requires llm_provider. "
+                f"Supported providers: {', '.join(KNOWN_PROVIDERS)}"
+            )
+
+        return LLMClassifier(
+            provider=llm_provider,
+            model=llm_model,
+            api_key=llm_api_key,
+            base_url=llm_base_url,
+        )
+
     async def resolve_and_classify(
         self,
         app_name: str,
         analysis_mode: AnalysisMode = DEFAULT_ANALYSIS_MODE,
         local_model_name: str = DEFAULT_LOCAL_MODEL_NAME,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
+        llm_api_key: str | None = None,
+        llm_base_url: str | None = None,
     ) -> str:
         if not isinstance(app_name, str) or not app_name.strip():
             raise ValueError("app_name must be a non-empty string.")
 
-        classifier = self._get_classifier(analysis_mode, local_model_name)
+        if analysis_mode not in ("local_ml", "cloud_llm"):
+            raise ValueError("analysis_mode must be 'local_ml' or 'cloud_llm'.")
+
+        # ------------------------------------------------------------------ #
+        # cloud_llm: bypass the resolver entirely, send the sanitized name    #
+        # directly to the LLM. No metadata sources are queried.               #
+        # ------------------------------------------------------------------ #
+        if analysis_mode == "cloud_llm":
+            llm_classifier = self._get_llm_classifier(
+                llm_provider=llm_provider,
+                llm_model=llm_model,
+                llm_api_key=llm_api_key,
+                llm_base_url=llm_base_url,
+            )
+            cleaned_name = self.resolver.sanitize(app_name)
+            provider_label = f"{llm_provider}/{llm_model}" if llm_model else llm_provider
+            self._progress(f"Classifying '{cleaned_name}' with {provider_label}...")
+            return await llm_classifier.classify(cleaned_name)
+
+        # ------------------------------------------------------------------ #
+        # local_ml: collect metadata from all sources, then embed + vote.     #
+        # ------------------------------------------------------------------ #
+        classifier = self._get_local_classifier(local_model_name)
 
         self._progress(f"Searching metadata for: '{app_name}'...")
         source_tokens = await self.resolver.resolve(app_name)

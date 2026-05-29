@@ -1,17 +1,16 @@
-# AppCategorizer
+# appcategorizer
 
-[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)
-[![Python](https://img.shields.io/badge/Python-orange)](https://www.python.org/)
+`appcategorizer` is a Python library and command-line tool that tries to classify an application into a broad software category from its name.
 
-`AppCategorizer` is a Python library and command-line tool that tries to classify an application into a broad software category from its name.
-
-It gathers metadata from several public sources, classifies each source independently with a local sentence-transformer model, then keeps the category selected by majority vote.
+It supports two classification backends: a local embedding model that gathers metadata from 14 public sources and votes across them, and a remote LLM that classifies the application name directly without any network metadata lookups.
 
 ## Features
 
-- Queries 14 metadata sources in parallel.
+- Queries 14 metadata sources in parallel (local ML mode).
 - Uses a local embedding model: `all-MiniLM-L6-v2`.
-- Classifies each source result independently.
+- Classifies each source result independently and selects the winner by majority vote.
+- Supports a remote LLM backend via `--mode cloud_llm` with six provider presets.
+- Reads API keys from CLI arguments, environment variables, or a `.env` file.
 - Supports verbose logs with `-v`.
 - Falls back to `Others` when no reliable category is found.
 
@@ -46,7 +45,9 @@ The default embedding model is stored in the user cache directory after the firs
 
 ## Usage
 
-Run the categorizer with an application name:
+### Local ML mode (default)
+
+Classify using the local embedding model and 14 metadata sources:
 
 ```bash
 appcategorizer Chrome
@@ -58,10 +59,71 @@ Enable verbose logs:
 appcategorizer Chrome -v
 ```
 
-Example output:
+Use a different local sentence-transformer model:
+
+```bash
+appcategorizer Chrome --llm-model sentence-transformers/all-MiniLM-L12-v2
+```
+
+### Cloud LLM mode
+
+Classify by sending the application name directly to a remote LLM. No metadata sources are queried.
+
+```bash
+appcategorizer Chrome --mode cloud_llm --llm-provider openai --llm-model gpt-4o --api-key sk-...
+```
+
+The `--api-key` argument is optional when the corresponding environment variable is set (see [API keys](#api-keys)).
+
+#### Supported providers
+
+| Provider | `--llm-provider` | Default model | Environment variable |
+|---|---|---|---|
+| OpenAI | `openai` | `gpt-4o-mini` | `OPENAI_API_KEY` |
+| Anthropic | `anthropic` | `claude-haiku-4-5-20251001` | `ANTHROPIC_API_KEY` |
+| Mistral AI | `mistral` | `mistral-small-latest` | `MISTRAL_API_KEY` |
+| Google Gemini | `gemini` | `gemini-2.0-flash` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| Ollama (local) | `ollama` | `llama3.2` | *(no key required)* |
+| Custom OpenAI-compatible | `custom` | *(required)* | `LLM_API_KEY` |
+
+Override the default model for any provider:
+
+```bash
+appcategorizer Chrome --mode cloud_llm --llm-provider anthropic --llm-model claude-opus-4-6
+```
+
+Use a custom or self-hosted OpenAI-compatible endpoint:
+
+```bash
+appcategorizer Chrome --mode cloud_llm --llm-provider custom \
+  --llm-model my-model --llm-base-url http://my-server/v1 --api-key my-key
+```
+
+Use a local Ollama instance on a non-default port:
+
+```bash
+appcategorizer Chrome --mode cloud_llm --llm-provider ollama \
+  --llm-base-url http://localhost:11435/v1
+```
+
+Example output (both modes):
 
 ```text
 Internet Browsers
+```
+
+### API keys
+
+API keys are resolved in this order for each call:
+
+1. `--api-key` CLI argument.
+2. Provider-specific environment variable (see table above).
+3. A `.env` file in the current working directory (loaded automatically when `python-dotenv` is installed).
+
+Copy `.env.example` to `.env` and fill in the keys for the providers you use:
+
+```bash
+cp .env.example .env
 ```
 
 ## Python API
@@ -82,6 +144,81 @@ asyncio.run(main())
 
 `resolve_and_classify()` returns the final category as a plain string. The CLI handles argument parsing, Rich spinners, and logging configuration separately from the library API.
 
+### Full signature
+
+```python
+await engine.resolve_and_classify(
+    app_name: str,
+    analysis_mode: str = "local_ml",
+    local_model_name: str = "all-MiniLM-L6-v2",
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    llm_api_key: str | None = None,
+    llm_base_url: str | None = None,
+)
+```
+
+Options:
+
+- `app_name`: application name to resolve and classify.
+- `analysis_mode`: classification backend. `"local_ml"` uses the local embedding classifier (default). `"cloud_llm"` sends the cleaned name to a remote LLM.
+- `local_model_name`: sentence-transformer model name used when `analysis_mode="local_ml"`. Defaults to `"all-MiniLM-L6-v2"`.
+- `llm_provider`: LLM provider identifier. Required when `analysis_mode="cloud_llm"`. One of `openai`, `anthropic`, `mistral`, `gemini`, `ollama`, `custom`.
+- `llm_model`: model name to use. Falls back to the provider default when omitted.
+- `llm_api_key`: explicit API key. Falls back to the environment variable or `.env` file.
+- `llm_base_url`: base URL override for the API endpoint. Required for `custom`; optional for `ollama`.
+
+### Examples
+
+Local ML with the default model:
+
+```python
+result = await engine.resolve_and_classify("firefox")
+```
+
+Local ML with an alternative sentence-transformer model:
+
+```python
+result = await engine.resolve_and_classify(
+    "firefox",
+    local_model_name="sentence-transformers/all-MiniLM-L12-v2",
+)
+```
+
+Cloud LLM with OpenAI (key from environment):
+
+```python
+result = await engine.resolve_and_classify(
+    "firefox",
+    analysis_mode="cloud_llm",
+    llm_provider="openai",
+    llm_model="gpt-4o",
+)
+```
+
+Cloud LLM with Anthropic (key passed explicitly):
+
+```python
+result = await engine.resolve_and_classify(
+    "firefox",
+    analysis_mode="cloud_llm",
+    llm_provider="anthropic",
+    llm_model="claude-opus-4-6",
+    llm_api_key="sk-ant-...",
+)
+```
+
+Cloud LLM with a local Ollama instance:
+
+```python
+result = await engine.resolve_and_classify(
+    "firefox",
+    analysis_mode="cloud_llm",
+    llm_provider="ollama",
+    llm_model="llama3.2",
+)
+```
+
 ## Tkinter GUI
 
 Install the optional GUI dependency:
@@ -96,42 +233,11 @@ Run the sample desktop app:
 python3 run_appcategorizer_gui.py
 ```
 
-Function signature:
-
-```python
-await engine.resolve_and_classify(
-    app_name: str,
-    analysis_mode: str = "local_ml",
-    local_model_name: str = "all-MiniLM-L6-v2",
-)
-```
-
-Options:
-
-- `app_name`: application name to resolve and classify.
-- `analysis_mode`: classification backend. Use `"local_ml"` for the local embedding classifier. `"cloud_llm"` is reserved for a future cloud LLM classifier and currently raises `NotImplementedError`.
-- `local_model_name`: sentence-transformer model name used when `analysis_mode="local_ml"`. Defaults to `"all-MiniLM-L6-v2"`.
-
-The default analysis mode uses a local sentence-transformer model:
-
-```python
-result = await engine.resolve_and_classify(
-    "firefox",
-    analysis_mode="local_ml",
-    local_model_name="all-MiniLM-L6-v2",
-)
-```
-
-To use another local sentence-transformer model:
-
-```python
-result = await engine.resolve_and_classify(
-    "firefox",
-    local_model_name="sentence-transformers/all-MiniLM-L12-v2",
-)
-```
+The GUI currently uses the local ML backend. LLM support will be added in a future release.
 
 ## How It Works
+
+### Local ML mode
 
 1. The input name is normalized by the resolver.
 2. Metadata sources are queried concurrently.
@@ -139,9 +245,17 @@ result = await engine.resolve_and_classify(
 4. The classifier embeds each source result and compares it to the category descriptions.
 5. The final category is selected by majority vote, ignoring `Others` when stronger votes exist.
 
+### Cloud LLM mode
+
+1. The input name is sanitized (lowercased, extension stripped, separators normalized).
+2. The cleaned name is sent to the configured LLM with a strict system prompt listing all valid categories.
+3. The LLM response is returned as-is if it matches a known category, or falls back to `Others`.
+
+No metadata sources are queried in this mode.
+
 ## Sources
 
-The resolver currently uses:
+The resolver is used in **local ML mode only**. It currently queries:
 
 - Apple
 - Arch Linux
@@ -167,7 +281,9 @@ All source metadata is fetched from public third-party services and should be tr
 - Public sources may change their HTML or API responses.
 - Ubuntu can occasionally fail for the same query.
 - Debian, Microsoft Store, and MyAbandonware are heavier because they rely on Playwright.
-- Category quality depends heavily on the descriptions in `engine/embedding_classifier.py`.
+- Category quality in local ML mode depends heavily on the descriptions in `engine/embedding_classifier.py`.
+- Cloud LLM mode relies on the LLM's training knowledge of the application; unknown or very niche apps may be misclassified.
+- Cloud LLM mode incurs API costs and latency proportional to the number of calls.
 
 ## Project Layout
 
@@ -175,14 +291,10 @@ All source metadata is fetched from public third-party services and should be tr
 appcategorizer/__init__.py                     Public Python API
 appcategorizer/core.py                         Library orchestration class
 appcategorizer/cli.py                          Installable CLI entry point
-appcategorizer/engine/resolver.py              Source orchestration
+appcategorizer/engine/resolver.py              Source orchestration (local ML mode)
 appcategorizer/engine/embedding_classifier.py  Embedding-based category classifier
+appcategorizer/engine/llm_classifier.py        Remote LLM category classifier
 appcategorizer/engine/logger.py                Shared logger configuration
 appcategorizer/engine/sources/                 Metadata source implementations
+.env.example                                   API key template for LLM providers
 ```
-## License
-
-AppCategorizer is licensed under the GNU LGPL 3 license only (LGPL-3.0-only).
-
-Copyright © 2026, Sorbonne Université, CNRS, LIP6.
-All rights reserved. This program and the accompanying materials are made available under the terms of the [GNU Lesser General Public License v3.0 (LGPL-3.0-only)](https://www.gnu.org/licenses/lgpl-3.0.en.html) which accompanies this distribution.

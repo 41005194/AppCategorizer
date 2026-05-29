@@ -2,23 +2,31 @@
 
 ## Description
 
-The application is a CLI app categorizer. It takes an application name, queries multiple public metadata sources in parallel, extracts short descriptive tokens from each source, classifies each source independently, then returns the final category selected by majority vote.
+The application is a CLI app categorizer. It takes an application name and returns one of eight predefined software categories. Two classification backends are available:
+
+- **local_ml**: queries 14 public metadata sources in parallel, classifies each source independently using a local sentence-transformer model, and returns the category selected by majority vote.
+- **cloud_llm**: sanitizes the application name and sends it directly to a remote LLM with a strict prompt. No metadata sources are queried.
 
 ## Project Structure
 
 - `appcategorizer/`: importable Python package.
-- `appcategorizer/cli.py`: CLI entry point, progress display, final result.
-- `appcategorizer/engine/resolver.py`: orchestrates all data sources asynchronously.
+- `appcategorizer/cli.py`: CLI entry point, argument parsing, progress display, final result.
+- `appcategorizer/core.py`: library orchestration class (`Categorizer`), mode routing.
+- `appcategorizer/engine/resolver.py`: orchestrates all data sources asynchronously (local ML mode only).
 - `appcategorizer/engine/sources/`: one module per metadata source.
 - `appcategorizer/engine/sources/base.py`: shared relevance matching logic.
 - `appcategorizer/engine/embedding_classifier.py`: embedding model, category descriptions, similarity scoring.
+- `appcategorizer/engine/llm_classifier.py`: remote LLM classifier, provider configs, request formatting.
 - `appcategorizer/engine/logger.py`: shared logging configuration.
+- `.env.example`: API key template for LLM providers.
 
 ## Data Sources
 
 All sources return a `list[str]` of text tokens. These tokens are later embedded and compared against category descriptions in `engine/embedding_classifier.py`.
 
 Name validation is handled through `BaseSource.is_relevant()`, which checks exact matches, normalized matches, prefix matches, and fuzzy matching with `rapidfuzz`.
+
+Sources are only queried in **local ML mode**. In cloud LLM mode the resolver is bypassed entirely.
 
 ### Apple Store
 
@@ -30,7 +38,7 @@ Name validation is handled through `BaseSource.is_relevant()`, which checks exac
 
 - `https://itunes.apple.com/search?term={app_name}&entity=software&limit=1`
 
-**Notes:** Uses Apple’s iTunes Search API. The code only reads the first result and validates it against `trackName`.
+**Notes:** Uses Apple's iTunes Search API. The code only reads the first result and validates it against `trackName`.
 
 **Retrieved fields:**
 
@@ -533,6 +541,8 @@ Label:
 
 ## Algorithm
 
+### Local ML mode
+
 It uses sentence embeddings with sentence-transformers, specifically `all-MiniLM-L6-v2`. Each category is represented by a handcrafted text description in `engine/embedding_classifier.py`. The app embeds the collected source text, compares it to each category embedding with cosine similarity, and keeps the best category when its score is above the confidence threshold. Otherwise, the result is `Others`.
 
 Algorithm flow:
@@ -540,8 +550,129 @@ Algorithm flow:
 1. Normalize the input name.
 2. Query all sources concurrently.
 3. Validate returned results with exact, prefix, normalized, and fuzzy matching.
-4. Convert each source’s tokens into one text string.
+4. Convert each source's tokens into one text string.
 5. Embed that text with a ML algorithm (`all-MiniLM-L6-v2`).
 6. Compare it to category embeddings using cosine similarity.
 7. Vote across source-level predictions.
 8. Print out the final category.
+
+### Cloud LLM mode
+
+The resolver and all metadata sources are bypassed. The application name is sanitized and sent directly to the configured LLM.
+
+Algorithm flow:
+
+1. Sanitize the input name (lowercase, strip file extension, normalize separators).
+2. Send the cleaned name to the LLM with a strict system prompt listing all valid category names.
+3. Return the LLM response if it matches a known category exactly; fall back to `Others` otherwise.
+
+## LLM Classifier
+
+Implemented in `engine/llm_classifier.py`. Supports six provider presets and one generic fallback.
+
+### Provider configurations
+
+| Provider | `llm_provider` | Wire format | Default model | API key env var |
+|---|---|---|---|---|
+| OpenAI | `openai` | OpenAI Chat Completions | `gpt-4o-mini` | `OPENAI_API_KEY` |
+| Anthropic | `anthropic` | Anthropic Messages API | `claude-haiku-4-5-20251001` | `ANTHROPIC_API_KEY` |
+| Mistral AI | `mistral` | OpenAI Chat Completions | `mistral-small-latest` | `MISTRAL_API_KEY` |
+| Google Gemini | `gemini` | Gemini `generateContent` | `gemini-2.0-flash` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| Ollama | `ollama` | OpenAI Chat Completions | `llama3.2` | *(none required)* |
+| Custom | `custom` | OpenAI Chat Completions | *(required)* | `LLM_API_KEY` |
+
+### API key resolution
+
+For each request the key is resolved in this order:
+
+1. `llm_api_key` parameter (or `--api-key` CLI argument).
+2. Provider-specific environment variable listed in the table above.
+3. `.env` file in the working directory (requires `python-dotenv`).
+
+Ollama skips key resolution entirely. `custom` requires an explicit `llm_base_url`.
+
+### Request formats
+
+**OpenAI Chat Completions** (used by `openai`, `mistral`, `ollama`, `custom`):
+
+```
+POST {base_url}/chat/completions
+Authorization: Bearer {api_key}
+
+{
+  "model": "{model}",
+  "messages": [
+    {"role": "system", "content": "{system_prompt}"},
+    {"role": "user",   "content": "{cleaned_app_name}"}
+  ],
+  "temperature": 0,
+  "max_tokens": 20
+}
+```
+
+Response field: `choices[0].message.content`
+
+**Anthropic Messages API**:
+
+```
+POST {base_url}/messages
+x-api-key: {api_key}
+anthropic-version: 2023-06-01
+
+{
+  "model": "{model}",
+  "system": "{system_prompt}",
+  "messages": [{"role": "user", "content": "{cleaned_app_name}"}],
+  "max_tokens": 20
+}
+```
+
+Response field: `content[0].text`
+
+**Google Gemini generateContent**:
+
+```
+POST {base_url}/models/{model}:generateContent?key={api_key}
+
+{
+  "system_instruction": {"parts": [{"text": "{system_prompt}"}]},
+  "contents": [{"parts": [{"text": "{cleaned_app_name}"}]}],
+  "generationConfig": {"temperature": 0, "maxOutputTokens": 20}
+}
+```
+
+Response field: `candidates[0].content.parts[0].text`
+
+### System prompt
+
+```
+You are an application classifier. Given an application name, respond with
+EXACTLY one of the following categories and nothing else:
+Internet Browsers
+Productivity Tools
+Communication & Collaboration
+Out-of-browser Entertainment
+Utilities & Maintenance
+Media Creation
+Development & Programming
+Others
+```
+
+## CLI Reference
+
+```
+appcategorizer [-h] [-v] [--mode {local_ml,cloud_llm}]
+               [--llm-provider PROVIDER] [--llm-model MODEL]
+               [--api-key KEY] [--llm-base-url URL]
+               app_name
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `app_name` | *(required)* | Application name to categorize |
+| `-v`, `--verbose` | `False` | Enable debug logs |
+| `--mode` | `local_ml` | Classification backend: `local_ml` or `cloud_llm` |
+| `--llm-provider` | `None` | LLM provider (required with `cloud_llm`) |
+| `--llm-model` | provider default | Model identifier |
+| `--api-key` | env / `.env` | API key for the LLM provider |
+| `--llm-base-url` | provider default | Base URL override (required for `custom`) |
