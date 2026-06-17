@@ -1,4 +1,4 @@
-# appcategorizer
+# AppCategorizer
 
 `appcategorizer` is a Python library and command-line tool that tries to classify an application into a broad software category from its name.
 
