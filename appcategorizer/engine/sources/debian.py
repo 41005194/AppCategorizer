@@ -17,7 +17,10 @@ class DebianSource(BaseSource):
                 try:
                     page = await browser.new_page()
 
-                    await page.goto(url, wait_until="networkidle")
+                    # Bound the load explicitly; the default is 30 s, which is
+                    # far longer than this source is allowed under the resolver's
+                    # per-source ceiling.
+                    await page.goto(url, wait_until="networkidle", timeout=8000)
 
                     # Capture everything needed while the page is still open.
                     html = await page.content()

@@ -3,6 +3,7 @@ import platform
 import queue
 import threading
 import tkinter as tk
+import webbrowser
 from tkinter import messagebox
 
 import ttkbootstrap as ttk
@@ -33,9 +34,17 @@ _DARK_THEME  = "darkly"
 _WINDOW_SIZE    = "640x700"
 _WINDOW_MINSIZE = (580, 580)
 
+# Shown in the footer (and mirrored in the CLI --help epilog).
+_LICENSE_TEXT = "AppCategorizer is licensed under the GNU LGPL 3 license only (LGPL-3.0-only)."
+_PROJECT_URL  = "https://github.com/behaveproject/AppCategorizer"
+
 _TITLE_FONT  = ("TkDefaultFont", 21, "bold")
 _RESULT_FONT = ("TkDefaultFont", 15, "bold")
 _DIALOG_FONT = ("TkDefaultFont", 13, "bold")
+
+# Small, quiet type for the footer license/link line.
+_FOOTER_FONT      = ("TkDefaultFont", 9)
+_FOOTER_LINK_FONT = ("TkDefaultFont", 9, "underline")
 
 # Rotating accent colours used to turn a category name into a small coloured
 # "chip" — the same trick GNOME Software, macOS Mail and Windows 11 use to
@@ -175,6 +184,9 @@ class AppCategorizerGui:
 
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
         self.worker: threading.Thread | None = None
+        # Built once on the first lookup and reused, so the embedding model is
+        # loaded into memory a single time instead of on every search.
+        self._categorizer: Categorizer | None = None
 
         # Shared state
         self.app_name = tk.StringVar()
@@ -236,6 +248,7 @@ class AppCategorizerGui:
         self._build_result(outer)
         self._build_history_section(outer)
         self._build_details(outer)
+        self._build_footer(outer)
 
     def _sync_scroll_region(self, _event: tk.Event | None = None) -> None:
         self._scroll_canvas.configure(scrollregion=self._scroll_canvas.bbox("all"))
@@ -389,6 +402,34 @@ class AppCategorizerGui:
         )
         self.log.pack(fill=BOTH, expand=True, pady=(8, 0))
         self.log.configure(state=DISABLED)
+
+    def _build_footer(self, parent: ttk.Frame) -> None:
+        # Kept as an attribute so _toggle_details can reveal the details panel
+        # *above* the footer (with before=self._footer) instead of below it.
+        self._footer = ttk.Frame(parent)
+        self._footer.pack(fill=X, pady=(18, 0))
+
+        ttk.Separator(self._footer).pack(fill=X, pady=(0, 8))
+        ttk.Label(
+            self._footer,
+            text=_LICENSE_TEXT,
+            style=_MUTED_STYLE,
+            font=_FOOTER_FONT,
+            wraplength=560,
+            anchor="center",
+            justify="center",
+        ).pack(fill=X)
+        link = ttk.Label(
+            self._footer,
+            text=_PROJECT_URL,
+            style=_MUTED_STYLE,
+            font=_FOOTER_LINK_FONT,
+            cursor="hand2",
+            anchor="center",
+            justify="center",
+        )
+        link.pack(fill=X, pady=(1, 0))
+        link.bind("<Button-1>", lambda _e: webbrowser.open(_PROJECT_URL))
 
     # ------------------------------------------------------------------ #
     # Preferences panel — analysis mode + cloud provider, all in one place #
@@ -661,7 +702,9 @@ class AppCategorizerGui:
         self._details_visible = not self._details_visible
         if self._details_visible:
             self._details_btn.configure(text="▾  Hide technical details")
-            self._details_frame.pack(fill=BOTH, expand=True, pady=(8, 0))
+            # before=self._footer keeps the license/link line pinned below the
+            # details panel rather than letting details pack underneath it.
+            self._details_frame.pack(fill=BOTH, expand=True, pady=(8, 0), before=self._footer)
         else:
             self._details_btn.configure(text="▸  Show technical details")
             self._details_frame.pack_forget()
@@ -717,8 +760,9 @@ class AppCategorizerGui:
             self.events.put(("progress", message))
 
         async def run() -> str:
-            categorizer = Categorizer(on_progress=on_progress)
-            return await categorizer.resolve_and_classify(
+            if self._categorizer is None:
+                self._categorizer = Categorizer(on_progress=on_progress)
+            return await self._categorizer.resolve_and_classify(
                 name,
                 analysis_mode=mode,
                 **llm_params,

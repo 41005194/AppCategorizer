@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,19 +7,21 @@ name = "appcategorizer"
 version = "0.1.0"
 description = "Classify applications into broad software categories from public metadata sources."
 readme = "README.md"
-requires-python = ">=3.10"
-license = { file = "LICENSE" }
+# Upper bound tracks torch/sentence-transformers wheel availability; the newest
+# Python releases often lack prebuilt wheels for the local ML backend.
+requires-python = ">=3.10,<3.14"
+license = "LGPL-3.0-only"
+license-files = ["LICENSE"]
 authors = [
     { name = "appcategorizer contributors" },
 ]
+# A bare install is lean and cloud-capable: only what cloud_llm mode needs.
+# The local embedding/scraping backend is opt-in via the [localml] extra.
 dependencies = [
-    "beautifulsoup4",
     "httpx>=0.27.0",
     "platformdirs>=4.0.0",
-    "playwright",
-    "rapidfuzz>=3.6.0",
+    "python-dotenv",
     "rich",
-    "sentence-transformers",
 ]
 
 [project.scripts]
@@ -31,6 +33,14 @@ dev = [
 ]
 gui = [
     "ttkbootstrap>=1.10.0",
+]
+# Local on-device ML backend: embedding model + the metadata-source scraping
+# stack. Combine with [gui] for the full desktop app: '.[gui,localml]'.
+localml = [
+    "beautifulsoup4",
+    "playwright",
+    "rapidfuzz>=3.6.0",
+    "sentence-transformers",
 ]
 
 [tool.setuptools.packages.find]

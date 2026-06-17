@@ -1,4 +1,4 @@
-# AppCategorizer
+# appcategorizer
 
 `appcategorizer` is a Python library and command-line tool that tries to classify an application into a broad software category from its name.
 
@@ -29,19 +29,58 @@ The current classifier can return:
 
 ## Installation
 
-Create and activate a virtual environment if needed, then install the package in editable mode:
+Create and activate a virtual environment if needed, then pick the install that matches how you intend to use the tool.
+
+### Lean cloud install (default)
+
+A bare install is lightweight and only pulls in what **cloud LLM mode** needs (`httpx`, `rich`, `platformdirs`, `python-dotenv`) — no embedding model and no headless-browser scraping stack:
 
 ```bash
 pip install -e .
 ```
 
-Some sources rely on Playwright because their pages require JavaScript rendering. Install Chromium for those sources:
+This is all you need to run `--mode cloud_llm`. If you later try to run local ML mode without the backend installed, you get a clear message telling you to install the `[localml]` extra.
+
+### Local ML backend
+
+To use the default **local ML mode** (embedding model + 14 metadata sources), add the `[localml]` extra:
 
 ```bash
-playwright install chromium
+pip install -e ".[localml]"
+```
+
+> **Recommended Python:** 3.10–3.12. The local ML backend depends on `torch`/`sentence-transformers`, whose prebuilt wheels can lag the newest Python releases — if installing the `[localml]` extra fails to find a wheel, use one of these versions.
+
+Some sources rely on Playwright because their pages require JavaScript rendering. Install Chromium for those sources (only needed for local ML mode):
+
+```bash
+python -m playwright install chromium
 ```
 
 The default embedding model is stored in the user cache directory after the first download. You can override the cache location from Python with `Categorizer(model_cache_dir=...)`.
+
+### Full desktop app
+
+The GUI supports both backends. For the complete experience — GUI plus the local ML backend — combine the extras:
+
+```bash
+pip install -e ".[gui,localml]"
+```
+
+### Windows / running without PATH setup
+
+`pip install -e .` creates `appcategorizer` (and `playwright`) as console scripts in Python's `Scripts\` directory. The bare commands `appcategorizer ...` and `playwright ...` only work if that directory is on your `PATH`, which is often not the case on Windows (Microsoft Store Python, the `py` launcher, or `--user` installs). The `python -m` forms below are equivalent and always work, on any OS:
+
+```bash
+python -m playwright install chromium   # instead of: playwright install chromium
+python -m appcategorizer Chrome         # instead of: appcategorizer Chrome
+```
+
+You can also run the bundled launcher script directly, which needs no PATH setup:
+
+```bash
+python run_appcategorizer.py Chrome
+```
 
 ## Usage
 
@@ -62,7 +101,7 @@ appcategorizer Chrome -v
 Use a different local sentence-transformer model:
 
 ```bash
-appcategorizer Chrome --llm-model sentence-transformers/all-MiniLM-L12-v2
+appcategorizer Chrome --local-model sentence-transformers/all-MiniLM-L12-v2
 ```
 
 ### Cloud LLM mode
@@ -221,10 +260,12 @@ result = await engine.resolve_and_classify(
 
 ## Tkinter GUI
 
-Install the optional GUI dependency:
+Install the GUI dependency. Add `localml` too if you want on-device ML mode in
+the GUI (cloud LLM mode works with `[gui]` alone):
 
 ```bash
-pip install -e ".[gui]"
+pip install -e ".[gui]"           # GUI, cloud LLM only
+pip install -e ".[gui,localml]"   # GUI + on-device ML backend
 ```
 
 Run the sample desktop app:
@@ -233,7 +274,9 @@ Run the sample desktop app:
 python3 run_appcategorizer_gui.py
 ```
 
-The GUI currently uses the local ML backend. LLM support will be added in a future release.
+The GUI supports both backends. Use the Preferences panel to switch between
+on-device ML and cloud LLM, and to set the provider, model, API key, and base URL
+when using cloud mode.
 
 ## How It Works
 
@@ -279,9 +322,7 @@ All source metadata is fetched from public third-party services and should be tr
 ## Known Limitations
 
 - Public sources may change their HTML or API responses.
-- Ubuntu can occasionally fail for the same query.
 - Debian, Microsoft Store, and MyAbandonware are heavier because they rely on Playwright.
-- Category quality in local ML mode depends heavily on the descriptions in `engine/embedding_classifier.py`.
 - Cloud LLM mode relies on the LLM's training knowledge of the application; unknown or very niche apps may be misclassified.
 - Cloud LLM mode incurs API costs and latency proportional to the number of calls.
 

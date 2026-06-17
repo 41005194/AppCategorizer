@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import sys
 import unittest
 
 from appcategorizer import Categorizer
@@ -87,6 +88,22 @@ class CategorizerTests(unittest.TestCase):
                 resolver=resolver,
                 classifier=classifier,
             ).resolve_and_classify("Firefox", local_model_name=" "))
+
+    def test_constructing_categorizer_does_not_import_local_ml_stack(self):
+        # Cloud mode only needs the resolver's regex sanitize(), so building a
+        # default Categorizer must not drag in the heavy local-ML scraping
+        # stack. Sources are loaded lazily on the first resolve() instead.
+        for module in ("playwright", "bs4", "rapidfuzz"):
+            sys.modules.pop(module, None)
+
+        Categorizer()
+
+        for module in ("playwright", "bs4", "rapidfuzz"):
+            self.assertNotIn(
+                module,
+                sys.modules,
+                f"{module} was imported by Categorizer() but should be lazy.",
+            )
 
     def test_package_import_does_not_configure_root_logging(self):
         root_logger = logging.getLogger()

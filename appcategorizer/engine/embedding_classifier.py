@@ -77,7 +77,13 @@ class EmbeddingClassifier:
         cache_dir: str | Path | None = None,
     ):
         _configure_model_environment()
-        from sentence_transformers import SentenceTransformer, util
+        try:
+            from sentence_transformers import SentenceTransformer, util
+        except ImportError as exc:
+            raise ImportError(
+                "local_ml mode requires the local backend dependencies. "
+                "Install them with: pip install 'appcategorizer[localml]'"
+            ) from exc
 
         self.model_name = model_name
         self.local_model_path = _model_path(model_name, cache_dir)

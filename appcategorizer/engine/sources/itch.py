@@ -1,4 +1,5 @@
 import httpx
+from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from .base import BaseSource
 
@@ -45,7 +46,14 @@ class ItchSource(BaseSource):
                 # Test all useful variants, including the compact form.
                 if self.is_relevant(app_name, title, url_slug, slug_spaced, slug_mashed) or \
                    self.is_relevant(app_name_mashed, slug_mashed):
-                    product_url = href
+                    # Only follow links that stay on itch.io (games live on
+                    # *.itch.io creator subdomains). Guards against fetching an
+                    # attacker-influenced host scraped out of the search HTML.
+                    candidate_url = urljoin("https://itch.io", href)
+                    netloc = urlparse(candidate_url).netloc
+                    if netloc != "itch.io" and not netloc.endswith(".itch.io"):
+                        continue
+                    product_url = candidate_url
                     break
 
             if not product_url:
