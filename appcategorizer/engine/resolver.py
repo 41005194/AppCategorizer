@@ -3,42 +3,66 @@ import httpx
 import re
 
 from .logger import logger
-from .sources import (
-    AppleSource,
-    ArchSource,
-    DebianSource,
-    FedoraSource,
-    FlathubSource,
-    GithubSource,
-    GogSource,
-    ItchSource,
-    MicrosoftSource,
-    MyAbandonwareSource,
-    SnapcraftSource,
-    SteamSource,
-    UbuntuSource,
-    WikidataSource,
-)
 
 class Resolver:
+    # Hard ceiling for a single source. The shared httpx client uses a 5 s
+    # timeout, but the Playwright-backed sources drive their own headless
+    # browser and ignore it, so without this a hung browser could stall the
+    # whole gather. Generous enough for the slowest source (MyAbandonware
+    # waits up to ~10 s on Cloudflare) while still bounding the worst case.
+    SOURCE_TIMEOUT = 30.0
+
     def __init__(self):
-        self.sources = [
-            AppleSource(),
-            FlathubSource(),
-            SnapcraftSource(),
-            SteamSource(),
-            ArchSource(),
-            DebianSource(),
-            UbuntuSource(),
-            FedoraSource(),
-            GithubSource(),
-            WikidataSource(),
-            MicrosoftSource(),
-            MyAbandonwareSource(),
-            GogSource(),
-            ItchSource(),
-        ]
-        
+        # Sources pull in the heavy local-ML scraping stack (playwright, bs4,
+        # rapidfuzz). Cloud mode only ever calls sanitize(), so we defer
+        # building them until resolve() actually needs them — keeping
+        # Resolver() (and therefore Categorizer()) cheap for cloud-only users.
+        self._sources: list | None = None
+
+    def _get_sources(self) -> list:
+        if self._sources is None:
+            try:
+                from .sources import (
+                    AppleSource,
+                    ArchSource,
+                    DebianSource,
+                    FedoraSource,
+                    FlathubSource,
+                    GithubSource,
+                    GogSource,
+                    ItchSource,
+                    MicrosoftSource,
+                    MyAbandonwareSource,
+                    SnapcraftSource,
+                    SteamSource,
+                    UbuntuSource,
+                    WikidataSource,
+                )
+            except ImportError as exc:
+                raise ImportError(
+                    "local_ml mode requires the local backend dependencies. "
+                    "Install them with: pip install 'appcategorizer[localml]'"
+                ) from exc
+
+            self._sources = [
+                AppleSource(),
+                FlathubSource(),
+                SnapcraftSource(),
+                SteamSource(),
+                ArchSource(),
+                DebianSource(),
+                UbuntuSource(),
+                FedoraSource(),
+                GithubSource(),
+                WikidataSource(),
+                MicrosoftSource(),
+                MyAbandonwareSource(),
+                GogSource(),
+                ItchSource(),
+            ]
+
+        return self._sources
+
     def sanitize(self, raw_name: str) -> str:
         name = raw_name.lower()
         name = re.sub(r'\.(exe|app|sh|bin|com|dmg|pkg)$', '', name)
@@ -50,7 +74,9 @@ class Resolver:
         source_name = source.__class__.__name__
         logger.debug(f"[START] Starting request for {source_name}")
         try:
-            return await source.fetch(client, app_name)
+            return await asyncio.wait_for(
+                source.fetch(client, app_name), timeout=self.SOURCE_TIMEOUT
+            )
         except Exception as e:
             logger.error(f"[CRITICAL_ERROR] Critical error in {source_name}: {e}")
             return e
@@ -59,16 +85,17 @@ class Resolver:
     async def resolve(self, raw_name: str) -> dict[str, list[str]]:
         app_name = self.sanitize(raw_name)
         results_by_source = {}
-        
-        logger.info(f"Starting resolution with {len(self.sources)} parallel sources...")
+        sources = self._get_sources()
+
+        logger.info(f"Starting resolution with {len(sources)} parallel sources...")
 
         async with httpx.AsyncClient(timeout=5.0) as client:
             # Use the wrapper instead of calling source.fetch directly.
-            tasks = [self._fetch_with_log(source, client, app_name) for source in self.sources]
+            tasks = [self._fetch_with_log(source, client, app_name) for source in sources]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for i, res in enumerate(results):
-                source_name = self.sources[i].__class__.__name__
+                source_name = sources[i].__class__.__name__
                 
                 if isinstance(res, list):
                     if res:

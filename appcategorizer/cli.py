@@ -6,13 +6,14 @@ import sys
 
 from rich.console import Console
 
-from .core import Categorizer
+from .core import DEFAULT_LOCAL_MODEL_NAME, Categorizer
+from .engine.llm_classifier import KNOWN_PROVIDERS
 from .engine.logger import logger, setup_logger
 
 console = Console(stderr=True)
 
-# Kept in sync with PROVIDER_CONFIGS in engine/llm_classifier.py.
-_LLM_PROVIDERS = ["openai", "anthropic", "mistral", "gemini", "ollama", "custom"]
+_LICENSE_TEXT = "AppCategorizer is licensed under the GNU LGPL 3 license only (LGPL-3.0-only)."
+_PROJECT_URL = "https://github.com/behaveproject/AppCategorizer"
 
 
 @contextlib.contextmanager
@@ -26,7 +27,9 @@ def _dummy_status():
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Categorize an application by name."
+        description="Categorize an application by name.",
+        epilog=f"{_LICENSE_TEXT}\n{_PROJECT_URL}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("app_name", help="Application name to categorize")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logs")
@@ -39,6 +42,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Classification backend. 'local_ml' uses a local embedding model (default). "
              "'cloud_llm' sends the app name to a remote LLM.",
     )
+    parser.add_argument(
+        "--local-model",
+        default=DEFAULT_LOCAL_MODEL_NAME,
+        metavar="MODEL",
+        help="Sentence-transformer model used in 'local_ml' mode. "
+             f"Defaults to '{DEFAULT_LOCAL_MODEL_NAME}'.",
+    )
 
     # --- LLM options (only used when --mode cloud_llm) ---
     llm_group = parser.add_argument_group(
@@ -48,16 +58,17 @@ def _build_parser() -> argparse.ArgumentParser:
     llm_group.add_argument(
         "--llm-provider",
         default=None,
-        choices=_LLM_PROVIDERS,
+        choices=KNOWN_PROVIDERS,
         metavar="PROVIDER",
-        help=f"LLM provider to use. Supported: {', '.join(_LLM_PROVIDERS)}.",
+        help=f"LLM provider to use. Supported: {', '.join(KNOWN_PROVIDERS)}.",
     )
     llm_group.add_argument(
         "--llm-model",
         default=None,
         metavar="MODEL",
-        help="Model identifier (e.g. gpt-4o, claude-haiku-4-5-20251001, gemini-2.0-flash). "
-             "Falls back to a sensible default for each provider.",
+        help="Cloud LLM model identifier (e.g. gpt-4o, claude-haiku-4-5-20251001, "
+             "gemini-2.0-flash); only used with --mode cloud_llm. Falls back to a "
+             "sensible default for each provider. For the local model, use --local-model.",
     )
     llm_group.add_argument(
         "--api-key",
@@ -104,6 +115,7 @@ async def main(argv: list[str] | None = None) -> None:
             final_category = await engine.resolve_and_classify(
                 args.app_name,
                 analysis_mode=args.mode,
+                local_model_name=args.local_model,
                 llm_provider=args.llm_provider,
                 llm_model=args.llm_model,
                 llm_api_key=args.api_key,
