@@ -9,7 +9,7 @@ description = "Classify applications into broad software categories from public 
 readme = "README.md"
 # Upper bound tracks torch/sentence-transformers wheel availability; the newest
 # Python releases often lack prebuilt wheels for the local ML backend.
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.10"
 license = "LGPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [
